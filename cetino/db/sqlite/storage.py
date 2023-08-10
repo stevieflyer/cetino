@@ -1,10 +1,12 @@
-import enum
+import abc
 import uuid
 import logging
 import sqlite3
 import pandas as pd
 from sqlite3 import Error
 
+from .data_type import SQLiteDataType
+from .sql_builder import SQLiteSQLBuilder
 from cetino.fs.csv import CSVTableStorage
 from cetino.utils.io_utils import ensure_pathlib_path
 from cetino.utils.log_utils import get_console_only_logger, get_logger
@@ -32,13 +34,6 @@ def connect(commit=False):
     return decorator
 
 
-class SQLiteDataType(enum.Enum):
-    INTEGER = 'INTEGER'
-    REAL = 'REAL'
-    TEXT = 'TEXT'
-    BLOB = 'BLOB'
-
-
 class SQLiteStorage:
     def __init__(self, data_path, log_path=None):
         """
@@ -54,9 +49,9 @@ class SQLiteStorage:
         self._logger = self.__configure_logger(log_path)
         self._db_file = ensure_pathlib_path(data_path)
         self._conn = None
+        """Single connection for reuse."""
         self.is_connect = False
         """State variable to indicate whether the connection is established."""
-        """Single connection for reuse."""
         self._connect()
 
     def execute(self, sql: str):
@@ -115,19 +110,41 @@ class SQLiteStorage:
         return self.__str__()
 
 
-class SQLiteTableStorage(SQLiteStorage):
+class SQLiteTableStorage(SQLiteStorage, abc.ABC):
     """
-    SQLite Table Manipulation
-    """
+    SQLite Table Manipulation, DO NOT instantiate this class directly.
 
-    fields = None
-    """list of fields, e.g. {'name': SQLiteDataType.TEXT, 'age': SQLiteDataType.INTEGER}"""
-    primary_key = None
-    """primary key, e.g. 'id'"""
-    unique = None
-    """unique fields, e.g. ['name']"""
-    table_name = None
-    """table name, e.g. 'employees'"""
+    You have to override the following properties to define the table metadata:
+    - fields: (dict) list of fields, e.g. {'name': SQLiteDataType.TEXT, 'age': SQLiteDataType.INTEGER}
+    - table_name: (str) table name, e.g. 'employees'
+    - (optional) primary_key_tuple: (tuple) primary key, e.g. ('id'), if not override, return default primary key
+    - (optional) unique_tuple: (tuple) unique fields, e.g. ('name', 'age')
+    """
+    @property
+    @abc.abstractmethod
+    def fields(self) -> dict:
+        """list of fields, e.g. {'name': SQLiteDataType.TEXT, 'age': SQLiteDataType.INTEGER}"""
+        pass
+
+    @property
+    @abc.abstractmethod
+    def table_name(self) -> str:
+        """table name, e.g. 'employees'"""
+        pass
+
+    @property
+    def primary_key_tuple(self) -> tuple:
+        """primary key, e.g. ('id'), if not override, return default primary key"""
+        return f'_{self.table_name}_pt',
+
+    @property
+    def unique_tuple(self) -> tuple:
+        """unique fields, e.g. ('name', 'age')"""
+        return ()
+
+    @property
+    def field_names_list(self):
+        return list(self.fields.keys())
 
     def __init__(self, data_path, log_path=None):
         """
@@ -135,7 +152,7 @@ class SQLiteTableStorage(SQLiteStorage):
         :param log_path: (str | pathlib.Path | None) log file path, if None, only print to console
         """
         super().__init__(data_path, log_path)
-        self._validate()
+        self._validate_table_metadata()
 
     @connect()
     def create(self):
@@ -143,7 +160,9 @@ class SQLiteTableStorage(SQLiteStorage):
         Create table.
         :return: None
         """
-        self.execute(self._create_table_sql)
+        sql = SQLiteSQLBuilder.create_table_sql(table_name=self.table_name, fields_dict=self.fields,
+                                                primary_key_tuple=self.primary_key_tuple, unique_tuple=self.unique_tuple)
+        self.execute(sql)
         self._log(f'Table {self.table_name} created', level=logging.INFO)
 
     @connect()
@@ -156,12 +175,13 @@ class SQLiteTableStorage(SQLiteStorage):
         :param use_pandas: (bool) if True, return pandas.DataFrame, else return list of dict
         :return: (list<dict> | pd.DataFrame)
         """
-        sql = self._query_sql(limit=limit, offset=offset)
+        sql = SQLiteSQLBuilder.query_sql(table_name=self.table_name, fields_list=self.field_names_list,
+                                         limit=limit, offset=offset)
         records = self.execute(sql)
         records = [dict(zip([field[0] for field in records.description], record)) for record in records]
         if use_pandas:
             records = pd.DataFrame(records)
-            records.set_index(self.primary_key, inplace=True)
+            records.set_index(self.primary_key_tuple, inplace=True)
         return records
 
     @connect()
@@ -174,21 +194,14 @@ class SQLiteTableStorage(SQLiteStorage):
         :param offset: (int)
         :return: None
         """
-        sql = self._query_sql(limit=limit, offset=offset)
+        sql = SQLiteSQLBuilder.query_sql(table_name=self.table_name, fields_list=self.field_names_list,
+                                         limit=limit, offset=offset)
         records = self.execute(sql)
         records = [dict(zip([field[0] for field in records.description], record)) for record in records]
         csv_storage = self.get_csv_storage()
         self._log(f'Dump {len(records)} records to {save_path}...', level=logging.INFO)
         csv_storage.write(save_path, records)
         self._log(f'Dumping finished', level=logging.INFO)
-
-    def get_csv_storage(self):
-        """
-        Get CSV storage for this table.
-
-        :return: (CSVTableStorage)
-        """
-        return CSVTableStorage(fields=list(self.fields.keys()), index_col=self.primary_key)
 
     @connect(commit=True)
     def insert(self, data_dict: dict):
@@ -198,110 +211,52 @@ class SQLiteTableStorage(SQLiteStorage):
         :param data_dict: (dict) data to insert, e.g. {'name': 'John', 'age': 25}
         :return: (int)　number of inserted rows
         """
-        insert_sql = self._insert_sql([data_dict])
+        insert_sql = SQLiteSQLBuilder.insert_sql(table_name=self.table_name, data_dict_list=[data_dict])
         return self.execute(insert_sql)
 
     @connect(commit=True)
     def insert_many(self, data_list: list):
-        insert_sql = self._insert_sql(data_list)
+        insert_sql = SQLiteSQLBuilder.insert_sql(table_name=self.table_name, data_dict_list=data_list)
         return self.execute(insert_sql)
 
-    def _query_sql(self, fields=None, where=None, order_by=None, limit=None, offset=None):
+    def get_csv_storage(self):
         """
-        Generate query sql.
+        Get CSV storage for this table.
 
-        :param fields: (list) fields to query, e.g. ['name', 'age']
-        :param where: (str) where clause, e.g. 'age > 20'
-        :param order_by: (str) order by clause, e.g. 'age DESC'
-        :param limit: (int) limit clause, e.g. 10
-        :return: (str) query sql
-        sql =
+        :return: (CSVTableStorage)
         """
-        if not fields:
-            fields = list(self.fields.keys())
-        where_clause = "" if not where else f"WHERE {where}\n"
-        order_by_clause = "" if not order_by else f"ORDER BY {order_by}\n"
-        limit_clause = "" if not limit else f"LIMIT {limit}\n"
-        offset_clause = "" if not offset else f"OFFSET {offset}\n"
-        sql = f"""
-SELECT {', '.join(fields)}
-FROM {self.table_name}
-{where_clause}{order_by_clause}{limit_clause}{offset_clause};"""
-        return sql.strip()
+        return CSVTableStorage(fields=list(self.fields.keys()), index_col=self.primary_key_tuple)
 
-    def _insert_sql(self, data_dict_list: list):
-        """
-        Generate insert many sql.
-
-        :param data_dict_list: (list<dict>) data to insert, e.g. [{'name': 'John', 'age': 25}, {'name': 'Mary', 'age': 30}]
-        :return: (str) insert sql, e.g. insert into employee (name, age) values (
-        """
-
-        def _fmt_value(value):
-            if isinstance(value, str):
-                return f'"{value}"'
-            else:
-                return str(value)
-
-        values_list = [[_fmt_value(value) for value in data_dict.values()] for data_dict in data_dict_list]
-        values_str = ', '.join([f'({", ".join(values)})' for values in values_list])
-        insert_sql = f"""INSERT INTO {self.table_name} ({', '.join(data_dict_list[0].keys())}) VALUES {values_str};"""
-        return insert_sql.strip()
-
-    @property
-    def _create_table_sql(self):
-        sql = f"""
-CREATE TABLE IF NOT EXISTS {self.table_name} (
-{self._fields_sql}{self._primary_key_sql}{self._unique_sql}
-);"""
-        return sql.strip()
-
-    @property
-    def _fields_sql(self):
-        fields_str = ', '.join([f'{field} {(self.fields[field]).value}' for field in self.fields])
-        return f"{fields_str}"
-
-    @property
-    def _primary_key_sql(self):
-        return f',\nPRIMARY KEY ({self.primary_key})'
-
-    @property
-    def _unique_sql(self):
-        if not self.unique and len(self.unique) > 0:
-            return f',\nUNIQUE ({", ".join(self.unique)})'
-        else:
-            return ''
-
-    def _validate(self):
+    def _validate_table_metadata(self):
         """
         Validate table metadata.
-
-        :return:
         """
-        # validate table_name
+
+        # Validate table_name: Ensure table name is defined.
         if not self.table_name:
-            raise ValueError('Table name is not defined')
-        # validate fields
-        if not self.fields:
-            raise ValueError('Fields are not defined')
-        if not isinstance(self.fields, dict) or len(self.fields) == 0:
-            raise ValueError('Fields must be a non-empty dict')
-        # validate unique
-        if self.unique:
-            if not isinstance(self.unique, list) and not isinstance(self.unique, tuple):
-                raise ValueError('Unique must be a list or tuple')
-            for field in self.unique:
+            raise ValueError('Table name must be defined.')
+
+        # Validate fields: Ensure fields are defined and structured correctly.
+        if not self.fields or not isinstance(self.fields, dict) or len(self.fields) == 0:
+            raise ValueError('Fields must be defined as a non-empty dictionary.')
+
+        # Validate unique fields: Ensure they are in the fields and are structured correctly.
+        if self.unique_tuple:
+            if not isinstance(self.unique_tuple, (list, tuple)):
+                raise ValueError('The "unique_tuple" attribute must be a list or tuple.')
+
+            for field in self.unique_tuple:
                 if field not in self.fields:
-                    raise ValueError(f'Unique field {field} is not in fields')
-        else:
-            self.unique = []
-        # validate primary key
-        if self.primary_key:
-            if self.primary_key not in self.fields:
-                raise ValueError(f'Primary key {self.primary_key} is not in fields {self.fields}')
-            if self.fields[self.primary_key].value != SQLiteDataType.INTEGER.value:
-                raise ValueError(
-                    f'Primary key {self.primary_key} must be SQLiteDataType.INTEGER, but {self.fields[self.primary_key]}')
-        else:
-            self.primary_key = f'_{self.table_name}_pt'
-        assert self.primary_key is not None, "Primary key is not defined"
+                    raise ValueError(f'Unique field "{field}" is not defined in the fields.')
+
+        # Validate primary key: Ensure it's in the fields and has the correct type.
+        if not self.primary_key_tuple:
+            raise ValueError("Primary key is not defined.")
+
+        if self.primary_key_tuple not in self.fields:
+            raise ValueError(f'Primary key "{self.primary_key_tuple}" is not defined in the fields.')
+
+        primary_key_data_type = self.fields[self.primary_key_tuple].value
+        if primary_key_data_type != SQLiteDataType.INTEGER.value:
+            raise ValueError(
+                f'Primary key "{self.primary_key_tuple}" must be of type SQLiteDataType.INTEGER. Found: {primary_key_data_type}.')

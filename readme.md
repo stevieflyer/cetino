@@ -19,13 +19,14 @@ pip install cetino
 ```python
 from cetino.db.sqlite import SQLiteTableStorage, SQLiteDataType
 
+
 class StudentStorage(SQLiteTableStorage):
     fields = {
         'id': SQLiteDataType.INTEGER,
         'name': SQLiteDataType.TEXT,
         'age': SQLiteDataType.INTEGER
     }
-    primary_key = 'id'
+    primary_key_tuple = 'id'
     table_name = 'student'
 ```
 
