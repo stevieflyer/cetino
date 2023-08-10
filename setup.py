@@ -13,5 +13,5 @@ setup(
     description='Store and load your data in a unified and light-weight way.',
     license='MIT',
     keywords='sqlite dict storage',
-    url='https://github.com/yourusername/cetino'
+    url='https://github.com/stevieflyer/cetino.git'
 )
