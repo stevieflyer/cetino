@@ -148,6 +148,3 @@ class CSVTableStorage:
 
     def __repr__(self):
         return self.__str__()
-
-
-stu_storage = StudentStorage(db_file="./steve.db", log_path="./steve_db.log")
