@@ -15,3 +15,4 @@ setup(
     keywords='sqlite dict storage',
     url='https://github.com/stevieflyer/cetino.git'
 )
+
