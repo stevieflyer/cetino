@@ -28,7 +28,8 @@ FROM {table_name}
         return insert_sql.strip()
 
     @classmethod
-    def create_table_sql(cls, table_name: str, fields_dict, primary_key_tuple=None, unique_tuple=None):
+    def create_table_sql(cls, table_name: str, fields_dict, primary_key_tuple=None, unique_tuple=None, allow_exist=False):
+        allow_exist_clause = "IF NOT EXISTS " if allow_exist else ""
         fields_declare = cls.fields_declare_sql(fields_dict)
         primary_key_declare = cls.primary_key_sql(primary_key_tuple) if primary_key_tuple else ""
         unique_declare = cls.unique_sql(unique_tuple) if unique_tuple else ""
@@ -37,9 +38,23 @@ FROM {table_name}
         sql_clauses = cls._declare_clause_sep.join(filter(bool, clauses))
 
         sql = f"""
-CREATE TABLE IF NOT EXISTS {table_name} (
+CREATE TABLE {allow_exist_clause}{table_name} (
 {sql_clauses}
 );"""
+        return sql.strip()
+
+    @classmethod
+    def drop_table_sql(cls, table_name: str, allow_not_exist=False):
+        allow_not_exist_clause = "IF EXISTS " if allow_not_exist else ""
+        sql = f"""DROP TABLE {allow_not_exist_clause}{table_name};"""
+        return sql.strip()
+
+    @classmethod
+    def delete_sql(cls, table_name, cond_list=None):
+        where_clause = cls.where_clause(cond_list)
+        sql = f"""
+DELETE FROM {table_name}
+{where_clause};"""
         return sql.strip()
 
 

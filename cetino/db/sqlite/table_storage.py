@@ -2,11 +2,13 @@ import abc
 import logging
 import pandas as pd
 
-from .type import SQLiteDataType
 from ._decorator import connect
 from .storage import SQLiteStorage
 from .sql_builder import SQLiteSQLBuilder
 from cetino.fs.csv.storage import CSVTableStorage
+from .type import SQLiteDataType
+
+default_primary_key_tuple = ('_id',)
 
 
 class SQLiteTableStorage(SQLiteStorage, abc.ABC):
@@ -19,6 +21,8 @@ class SQLiteTableStorage(SQLiteStorage, abc.ABC):
     - (optional) primary_key_tuple: (tuple) primary key, e.g. ('id'), if not override, return default primary key
     - (optional) unique_tuple: (tuple) unique fields, e.g. ('name', 'age')
     """
+    primary_key_tuple = default_primary_key_tuple
+    unique_tuple = ()
 
     @property
     @abc.abstractmethod
@@ -33,20 +37,6 @@ class SQLiteTableStorage(SQLiteStorage, abc.ABC):
         pass
 
     @property
-    def primary_key_tuple(self) -> tuple:
-        """primary key, e.g. ('id'), if not override, return default primary key"""
-        return self._default_pk_name(),
-
-    @classmethod
-    def _default_pk_name(cls) -> str:
-        return f'_{cls.table_name}_pt'
-
-    @property
-    def unique_tuple(self) -> tuple:
-        """unique fields, e.g. ('name', 'age')"""
-        return ()
-
-    @property
     def field_names_list(self):
         return list(self.fields.keys())
 
@@ -56,19 +46,35 @@ class SQLiteTableStorage(SQLiteStorage, abc.ABC):
         :param log_path: (str | pathlib.Path | None) log file path, if None, only print to console
         """
         super().__init__(data_path, log_path)
+        self.ddl = None
         self._validate_table_metadata()
 
     @connect()
-    def create(self):
+    def create(self, allow_exist: bool = False):
         """
         Create table.
         :return: None
         """
-        sql = SQLiteSQLBuilder.create_table_sql(table_name=self.table_name, fields_dict=self.fields,
-                                                primary_key_tuple=self.primary_key_tuple,
-                                                unique_tuple=self.unique_tuple)
-        self.execute(sql)
+        full_fields = self.fields.copy()
+        if self.primary_key_tuple == default_primary_key_tuple:
+            for pk_item in self.primary_key_tuple:
+                full_fields[pk_item] = SQLiteDataType.INTEGER
+        self.ddl = SQLiteSQLBuilder.create_table_sql(table_name=self.table_name, fields_dict=full_fields,
+                                                     primary_key_tuple=self.primary_key_tuple,
+                                                     unique_tuple=self.unique_tuple,
+                                                     allow_exist=allow_exist)
+        self.execute(self.ddl)
         self._log(f'Table {self.table_name} created', level=logging.INFO)
+
+    @connect()
+    def drop(self, allow_not_exist=True):
+        """
+        Drop table.
+        :return: None
+        """
+        sql = SQLiteSQLBuilder.drop_table_sql(self.table_name, allow_not_exist=allow_not_exist)
+        self.execute(sql)
+        self._log(f'Table {self.table_name} dropped', level=logging.INFO)
 
     @connect()
     def query(self, limit: int = None, offset: int = None, use_pandas: bool = False):
@@ -117,6 +123,13 @@ class SQLiteTableStorage(SQLiteStorage, abc.ABC):
         cursor = self.execute(insert_sql)
         return cursor.rowcount
 
+    @connect(commit=True)
+    def empty(self):
+        delete_sql = SQLiteSQLBuilder.delete_sql(table_name=self.table_name)
+        print(f"delete_sql: {delete_sql}")
+        cursor = self.execute(delete_sql)
+        return cursor.rowcount
+
     def get_csv_storage(self):
         return CSVTableStorage(fields=list(self.fields.keys()), index_col=self.primary_key_tuple)
 
@@ -152,21 +165,17 @@ class SQLiteTableStorage(SQLiteStorage, abc.ABC):
 
     def _validate_primary_key(self):
         # 1. primary key tuple cannot be empty
-        if not self.primary_key_tuple:
-            msg = 'Primary key is not defined.'
+        if not self.primary_key_tuple or not isinstance(self.primary_key_tuple, (list, tuple)):
+            msg = '`primary_key_tuple` must be a non-empty list or tuple.'
             self._log(msg, level=logging.ERROR)
             raise ValueError(msg)
-        if self.primary_key_tuple != (self._default_pk_name(),):
+        if self.primary_key_tuple != default_primary_key_tuple:
             # 2. user specified primary key must be defined in the fields
             for pk_item in self.primary_key_tuple:
                 if pk_item not in self.fields:
                     msg = f'User specified primary key "{pk_item}" is not defined in the fields.'
                     self._log(msg, level=logging.ERROR)
                     raise ValueError(msg)
-        else:
-            # 3. default pk, e.g. "_employees_pt", we must add it to the fields
-            if self._default_pk_name() not in self.fields:
-                self.fields[self._default_pk_name()] = SQLiteDataType.INTEGER
 
 
 __all__ = ['SQLiteTableStorage']
