@@ -1,0 +1,17 @@
+import enum
+
+
+class MySQLDataType(enum.Enum):
+    TINYINT = "TINYINT"
+    SMALLINT = "SMALLINT"
+    MEDIUMINT = "MEDIUMINT"
+    INT = "INT"
+    BIGINT = "BIGINT"
+    FLOAT = "FLOAT"
+    DOUBLE = "DOUBLE"
+    CHAR = "CHAR"
+    VARCHAR = "VARCHAR"
+    TEXT = "TEXT"
+    TINYTEXT = "TINYTEXT"
+    MEDIUMTEXT = "MEDIUMTEXT"
+    LONGTEXT = "LONGTEXT"

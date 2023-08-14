@@ -2,7 +2,7 @@ from .._base import BaseSQLBuilder
 from cetino.utils.string_utils import add_quote
 
 
-class SQLiteSQLBuilder(BaseSQLBuilder):
+class MySQLSQLBuilder(BaseSQLBuilder):
     @classmethod
     def query_sql(cls, table_name: str, fields_list=None, cond_list=None, order_by_dict=None, limit=None, offset=None):
         fields_str = ', '.join(fields_list) if fields_list else "*"
@@ -39,8 +39,8 @@ FROM {table_name}
         sql = f"""
 CREATE TABLE IF NOT EXISTS {table_name} (
 {sql_clauses}
-);"""
+) ENGINE=InnoDB;"""  # Using InnoDB as default storage engine for MySQL
         return sql.strip()
 
 
-__all__ = ["SQLiteSQLBuilder"]
+__all__ = ["MySQLSQLBuilder"]
